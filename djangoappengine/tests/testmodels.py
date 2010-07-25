@@ -1,10 +1,13 @@
 from django.db import models
+from ..db.db_settings import get_indexes
 
 class EmailModel(models.Model):
     email = models.EmailField()
 
 class DateTimeModel(models.Model):
     datetime = models.DateTimeField()
+    datetime_auto_now = models.DateTimeField(auto_now=True)
+    datetime_auto_now_add = models.DateTimeField(auto_now_add=True)
 
 class FieldsWithoutOptionsModel(models.Model):
     datetime = models.DateTimeField()
@@ -22,6 +25,7 @@ class FieldsWithoutOptionsModel(models.Model):
 #    file = models.FileField()
 #    file_path = models.FilePathField()
     long_text = models.TextField()
+    indexed_text = models.TextField()
     xml = models.XMLField()
     integer = models.IntegerField()
     small_integer = models.SmallIntegerField()
@@ -32,6 +36,8 @@ class FieldsWithoutOptionsModel(models.Model):
 #    one_to_one = models.OneToOneField()
 #    decimal = models.DecimalField() # can be None
 #    image = models.ImageField()
+
+get_indexes()[FieldsWithoutOptionsModel] = {'indexed': ('indexed_text',)}
 
 class FieldsWithOptionsModel(models.Model):
     # any type of unique (unique_data, ...) is not supported on GAE, instead you
@@ -74,3 +80,6 @@ class OrderedModel(models.Model):
 
 class DecimalModel(models.Model):
     decimal = models.DecimalField(max_digits=9, decimal_places=2)
+
+class SelfReferenceModel(models.Model):
+    ref = models.ForeignKey('self', null=True)

@@ -37,7 +37,7 @@ def setup_env():
                  os.path.join(COMMON_DIR, '.google_appengine'),
                  '/usr/local/google_appengine',
                  '/Applications/GoogleAppEngineLauncher.app/Contents/Resources/GoogleAppEngine-default.bundle/Contents/Resources/google_appengine']
-        for path in os.environ.get('PATH', '').replace(';', ':').split(':'):
+        for path in os.environ.get('PATH', '').split(os.pathsep):
             path = path.rstrip(os.sep)
             if path.endswith('google_appengine'):
                 paths.append(path)
@@ -75,6 +75,23 @@ def setup_env():
     setup_project()
     setup_logging()
 
+    # Patch Django to support loading management commands from zip files
+    from django.core import management
+    management.find_commands = find_commands
+
+def find_commands(management_dir):
+    """
+    Given a path to a management directory, returns a list of all the command
+    names that are available.
+    This version works for django deployments which are file based or
+    contained in a ZIP (in sys.path).
+
+    Returns an empty list if no commands are defined.
+    """
+    import pkgutil
+    return [modname for importer, modname, ispkg in pkgutil.iter_modules(
+                [os.path.join(management_dir, 'commands')]) if not ispkg]
+
 def setup_threading():
     # XXX: GAE's threading.local doesn't work correctly with subclassing
     try:
@@ -98,11 +115,23 @@ def setup_logging():
         logging.getLogger().setLevel(logging.INFO)
 
 def setup_project():
-    from .utils import have_appserver
+    from .utils import have_appserver, on_production_server
     if have_appserver:
         # This fixes a pwd import bug for os.path.expanduser()
         global env_ext
         env_ext['HOME'] = PROJECT_DIR
+
+    # Get the subprocess module into the dev_appserver sandbox.
+    # This module is just too important for development.
+    # The second part of this hack is in runserver.py which adds
+    # important environment variables like PATH etc.
+    if not on_production_server:
+        try:
+            from google.appengine.api.mail_stub import subprocess
+            sys.modules['subprocess'] = subprocess
+        except ImportError:
+            import logging
+            logging.warn('Could not add the subprocess module to the sandbox.')
 
     os.environ.update(env_ext)
 

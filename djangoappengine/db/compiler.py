@@ -1,3 +1,5 @@
+from .db_settings import get_indexes
+
 import datetime
 import sys
 
@@ -137,6 +139,10 @@ class GAEQuery(NonrelQuery):
     # This function is used by the default add_filters() implementation
     @safe_call
     def add_filter(self, column, lookup_type, negated, db_type, value):
+        if value in ([], ()):
+            self.pk_filters = []
+            return
+
         # Emulated/converted lookups
         if column == self.query.get_meta().pk.column:
             column = '__key__'
@@ -400,10 +406,15 @@ class SQLCompiler(NonrelCompiler):
 class SQLInsertCompiler(NonrelInsertCompiler, SQLCompiler):
     @safe_call
     def insert(self, data, return_id=False):
-        kwds = {}
         gae_data = {}
+        opts = self.query.get_meta()
+        indexes = get_indexes().get(self.query.model, {})
+        unindexed_fields = indexes.get('unindexed', ())
+        unindexed_cols = [opts.get_field(name).column
+                          for name in unindexed_fields]
+        kwds = {'unindexed_properties': unindexed_cols}
         for column, value in data.items():
-            if column == self.query.get_meta().pk.column:
+            if column == opts.pk.column:
                 if isinstance(value, basestring):
                     kwds['name'] = value
                 else:

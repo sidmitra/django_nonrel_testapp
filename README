@@ -1,0 +1,23 @@
+Since these files in this repo might not be updated, save the following code as a .bat and run. 
+Replace the PROJECT_NAME and it should clone and setup all the relevant repos automatically. Just modify set/rmdir commands for bash if needed.
+
+set PROJECT_NAME=cloudshuffle-homepage
+
+hg clone http://bitbucket.org/wkornewald/django-testapp/
+mv django-testapp %PROJECT_NAME%
+
+:: django-nonrel
+hg clone http://bitbucket.org/wkornewald/django-nonrel
+mv django-nonrel/django %PROJECT_NAME%
+rmdir /S /Q django-nonrel
+
+:: djangotoolbox
+hg clone http://bitbucket.org/wkornewald/djangotoolbox/
+mv djangotoolbox/djangotoolbox %PROJECT_NAME%
+rmdir /S /Q djangotoolbox
+
+:: djangoappengine
+cd %PROJECT_NAME%
+hg clone http://bitbucket.org/wkornewald/djangoappengine/
+
+
