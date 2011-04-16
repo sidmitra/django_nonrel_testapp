@@ -52,7 +52,7 @@ TEMPLATE_DIRS = (os.path.join(os.path.dirname(__file__), 'templates'),)
 
 ROOT_URLCONF = 'urls'
 
-try:
-    from local_settings import *
-except:
-    pass
+#try:
+    #from local_settings import *
+#except:
+    #pass
