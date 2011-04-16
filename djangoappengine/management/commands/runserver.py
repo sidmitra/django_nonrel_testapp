@@ -16,11 +16,13 @@
 
 
 import logging
-import os
 import sys
 
+from django.db import connections
+from ...boot import PROJECT_DIR
+from ...db.base import DatabaseWrapper
 from django.core.management.base import BaseCommand
-from django.db import connection
+from django.core.exceptions import ImproperlyConfigured
 
 
 def start_dev_appserver(argv):
@@ -42,10 +44,7 @@ def start_dev_appserver(argv):
             try:
                 addr, port = addrport.split(":")
             except ValueError:
-                addr, port = None, addrport
-            if not port.isdigit():
-                print "Error: '%s' is not a valid port number." % port
-                sys.exit(1)
+                addr = addrport
         else:
             args.append(argv[2])
         args.extend(argv[3:])
@@ -60,31 +59,26 @@ def start_dev_appserver(argv):
                      '--smtp_port', str(settings.EMAIL_PORT),
                      '--smtp_user', settings.EMAIL_HOST_USER,
                      '--smtp_password', settings.EMAIL_HOST_PASSWORD])
+
     # Pass the application specific datastore location to the server.
-    p = connection._get_paths()
-    if '--datastore_path' not in args:
-        args.extend(['--datastore_path', p[0]])
-    if '--blobstore_path' not in args:
-        args.extend(['--blobstore_path', p[1]])
-    if '--history_path' not in args:
-        args.extend(['--history_path', p[2]])
+    for name in connections:
+        connection = connections[name]
+        if isinstance(connection, DatabaseWrapper):
+            for key, path in connection._get_paths().items():
+                # XXX/TODO: Remove this when SDK 1.4.3 is released
+                if key == 'prospective_search_path':
+                    continue
+
+                arg = '--' + key
+                if arg not in args:
+                    args.extend([arg, path])
+            break
 
     # Reset logging level to INFO as dev_appserver will spew tons of debug logs
     logging.getLogger().setLevel(logging.INFO)
 
-    # Allow to run subprocesses
-    from google.appengine.tools import dev_appserver
-    try:
-        env = dev_appserver.DEFAULT_ENV
-        dev_appserver.DEFAULT_ENV = os.environ.copy()
-        dev_appserver.DEFAULT_ENV.update(env)
-    except AttributeError:
-        logging.warn('Could not patch the default environment. '
-                     'The subprocess module will not work correctly.')
-
     # Append the current working directory to the arguments.
-    dev_appserver_main.main([progname] + args + [os.getcwdu()])
-
+    dev_appserver_main.main([progname] + args + [PROJECT_DIR])
 
 class Command(BaseCommand):
     """Overrides the default Django runserver command.

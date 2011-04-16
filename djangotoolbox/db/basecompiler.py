@@ -1,8 +1,9 @@
 from django.conf import settings
+from django.db.models.fields import NOT_PROVIDED
 from django.db.models.sql import aggregates as sqlaggregates
 from django.db.models.sql.compiler import SQLCompiler
 from django.db.models.sql.constants import LOOKUP_SEP, MULTI, SINGLE
-from django.db.models.sql.where import AND, OR
+from django.db.models.sql.where import AND, OR, Constraint
 from django.db.utils import DatabaseError, IntegrityError
 from django.utils.tree import Node
 import random
@@ -124,11 +125,10 @@ class NonrelQuery(object):
         # not necessary with emulated negation handling code
         result = []
         for child in children:
-            if isinstance(child, Node) and child.negated and \
-                    len(child.children) == 1 and \
-                    isinstance(child.children[0], tuple):
-                node, lookup_type, annotation, value = child.children[0]
-                if lookup_type == 'isnull' and value == True and node.field is None:
+            if isinstance(child, tuple):
+                constraint = child[0]
+                lookup_type = child[1]
+                if lookup_type == 'isnull' and constraint.field is None:
                     continue
             result.append(child)
         return result
@@ -219,16 +219,6 @@ class NonrelCompiler(SQLCompiler):
         for entity in self.build_query(fields).fetch(low_mark, high_mark):
             yield self._make_result(entity, fields)
 
-    def _make_result(self, entity, fields):
-        result = []
-        for field in fields:
-            if not field.null and entity.get(field.column,
-                    field.get_default()) is None:
-                raise DatabaseError("Non-nullable field %s can't be None!" % field.name)
-            result.append(self.convert_value_from_db(field.db_type(
-                connection=self.connection), entity.get(field.column, field.get_default())))
-        return result
-
     def has_results(self):
         return self.get_count(check_exists=True)
 
@@ -254,6 +244,18 @@ class NonrelCompiler(SQLCompiler):
     # ----------------------------------------------
     # Additional NonrelCompiler API
     # ----------------------------------------------
+    def _make_result(self, entity, fields):
+        result = []
+        for field in fields:
+            value = entity.get(field.column, NOT_PROVIDED)
+            if value is NOT_PROVIDED:
+                value = field.get_default()
+            if value is None and not field.null:
+                raise DatabaseError("Non-nullable field %s can't be None!" % field.name)
+            value = self.convert_value_from_db(field.db_type(connection=self.connection), value)
+            result.append(value)
+        return result
+
     def check_query(self):
         if (len([a for a in self.query.alias_map if self.query.alias_refcount[a]]) > 1
                 or self.query.distinct or self.query.extra or self.query.having):
@@ -297,10 +299,20 @@ class NonrelCompiler(SQLCompiler):
         only_load = self.deferred_to_columns()
         if only_load:
             db_table = self.query.model._meta.db_table
+            only_load = dict((k, v) for k, v in only_load.items()
+                             if v or k == db_table)
+            if len(only_load.keys()) > 1:
+                raise DatabaseError('Multi-table inheritance is not supported '
+                                    'by non-relational DBs.' + repr(only_load))
             fields = [f for f in fields if db_table in only_load and
                       f.column in only_load[db_table]]
+
+        query_model = self.query.model
+        if query_model._meta.proxy:
+            query_model = query_model._meta.proxy_for_model
+
         for field in fields:
-            if field.model._meta != self.query.model._meta:
+            if field.model._meta != query_model._meta:
                 raise DatabaseError('Multi-table inheritance is not supported '
                                     'by non-relational DBs.')
         return fields
@@ -342,8 +354,8 @@ class NonrelInsertCompiler(object):
                 if not field.null and value is None:
                     raise DatabaseError("You can't set %s (a non-nullable "
                                         "field) to None!" % field.name)
-                value = self.convert_value_for_db(field.db_type(connection=self.connection),
-                    value)
+                db_type = field.db_type(connection=self.connection)
+                value = self.convert_value_for_db(db_type, value)
             data[column] = value
         return self.insert(data, return_id=return_id)
 

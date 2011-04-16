@@ -1,6 +1,8 @@
 *.pyc
 *.DS_Store
 pip-log.txt
-.junk
-
-
+/local_settings.py
+.hg
+.hgeol
+.hgignore
+.gaedata/

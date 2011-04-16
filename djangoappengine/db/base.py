@@ -1,15 +1,27 @@
-import datetime
-from .creation import DatabaseCreation
 from ..utils import appid, have_appserver, on_production_server
+from ..boot import DATA_ROOT
+from .creation import DatabaseCreation
+from django.db.backends.util import format_number
 from djangotoolbox.db.base import NonrelDatabaseFeatures, \
     NonrelDatabaseOperations, NonrelDatabaseWrapper, NonrelDatabaseClient, \
     NonrelDatabaseValidation, NonrelDatabaseIntrospection
-import logging, os
-from django.db.backends.util import format_number
+from google.appengine.api.datastore import Query
+from urllib2 import HTTPError, URLError
+import logging
+import os
+import time
+
+REMOTE_API_SCRIPT = '$PYTHON_LIB/google/appengine/ext/remote_api/handler.py'
+DATASTORE_PATHS = {
+    'datastore_path': os.path.join(DATA_ROOT, 'datastore'),
+    'blobstore_path': os.path.join(DATA_ROOT, 'blobstore'),
+    'rdbms_sqlite_path': os.path.join(DATA_ROOT, 'rdbms'),
+    'prospective_search_path': os.path.join(DATA_ROOT, 'prospective-search'),
+}
 
 def auth_func():
     import getpass
-    return raw_input('Login via Google Account:'), getpass.getpass('Password:')
+    return raw_input('Login via Google Account (see note above if login fails): '), getpass.getpass('Password: ')
 
 def rpc_server_factory(*args, ** kwargs):
     from google.appengine.tools import appengine_rpc
@@ -17,48 +29,23 @@ def rpc_server_factory(*args, ** kwargs):
     return appengine_rpc.HttpRpcServer(*args, ** kwargs)
 
 def get_datastore_paths(options):
-    """Returns a tuple with the path to the datastore and history file.
+    paths = {}
+    for key, path in DATASTORE_PATHS.items():
+        paths[key] = options.get(key, path)
+    return paths
 
-    The datastore is stored in the same location as dev_appserver uses by
-    default, but the name is altered to be unique to this project so multiple
-    Django projects can be developed on the same machine in parallel.
-
-    Returns:
-      (datastore_path, history_path)
-    """
-    from google.appengine.tools import dev_appserver_main
-    datastore_path = options.get('datastore_path',
-                                 dev_appserver_main.DEFAULT_ARGS['datastore_path'].replace(
-                                 'dev_appserver', 'django_%s' % appid))
-    blobstore_path = options.get('blobstore_path',
-                                 dev_appserver_main.DEFAULT_ARGS['blobstore_path'].replace(
-                                 'dev_appserver', 'django_%s' % appid))
-    history_path = options.get('history_path',
-                               dev_appserver_main.DEFAULT_ARGS['history_path'].replace(
-                               'dev_appserver', 'django_%s' % appid))
-    return datastore_path, blobstore_path, history_path
-
-def get_test_datastore_paths(inmemory=True):
-    """Returns a tuple with the path to the test datastore and history file.
-
-    If inmemory is true, (None, None) is returned to request an in-memory
-    datastore. If inmemory is false the path returned will be similar to the path
-    returned by get_datastore_paths but with a different name.
-
-    Returns:
-      (datastore_path, history_path)
-    """
+def get_test_datastore_paths(options, inmemory=True):
+    paths = get_datastore_paths(options)
+    for key in paths:
+        paths[key] += '.test'
     if inmemory:
-        return None, None, None
-    datastore_path, blobstore_path, history_path = get_datastore_paths()
-    datastore_path = datastore_path.replace('.datastore', '.testdatastore')
-    blobstore_path = blobstore_path.replace('.blobstore', '.testblobstore')
-    history_path = history_path.replace('.datastore', '.testdatastore')
-    return datastore_path, blobstore_path, history_path
+        for key in ('datastore_path', 'blobstore_path'):
+            paths[key] = None
+    return paths
 
-def destroy_datastore(*args):
+def destroy_datastore(paths):
     """Destroys the appengine datastore at the specified paths."""
-    for path in args:
+    for path in paths.values():
         if not path:
             continue
         try:
@@ -68,14 +55,16 @@ def destroy_datastore(*args):
                 logging.error("Failed to clear datastore: %s" % error)
 
 class DatabaseFeatures(NonrelDatabaseFeatures):
-    pass
+    allows_primary_key_0 = True
+    supports_dicts = True
 
 class DatabaseOperations(NonrelDatabaseOperations):
     compiler_module = __name__.rsplit('.', 1)[0] + '.compiler'
 
     DEFAULT_MAX_DIGITS = 16
+
     def value_to_db_decimal(self, value, max_digits, decimal_places):
-        if value is None: 
+        if value is None:
             return None
         sign = value < 0 and u'-' or u''
         if sign: 
@@ -107,7 +96,9 @@ class DatabaseValidation(NonrelDatabaseValidation):
     pass
 
 class DatabaseIntrospection(NonrelDatabaseIntrospection):
-    pass
+    def table_names(self):
+        """Returns a list of names of all tables that exist in the database."""
+        return [kind.key().name() for kind in Query(kind='__kind__').Run()]
 
 class DatabaseWrapper(NonrelDatabaseWrapper):
     def __init__(self, *args, **kwds):
@@ -119,19 +110,21 @@ class DatabaseWrapper(NonrelDatabaseWrapper):
         self.validation = DatabaseValidation(self)
         self.introspection = DatabaseIntrospection(self)
         options = self.settings_dict
-        self.use_test_datastore = options.get('use_test_datastore', False)
-        self.test_datastore_inmemory = options.get('test_datastore_inmemory', True)
-        self.remote = options.get('remote', False)
+        self.use_test_datastore = False
+        self.test_datastore_inmemory = True
+        self.remote = options.get('REMOTE', False)
         if on_production_server:
             self.remote = False
-        self.remote_app_id = options.get('remote_id', appid)
-        self.remote_host = options.get('remote_host', '%s.appspot.com' % self.remote_app_id)
-        self.remote_url = options.get('remote_url', '/remote_api')
+        self.remote_app_id = options.get('REMOTE_APP_ID', appid)
+        self.high_replication = options.get('HIGH_REPLICATION', False)
+        self.domain = options.get('DOMAIN', 'appspot.com')
+        self.remote_api_path = options.get('REMOTE_API_PATH', None)
+        self.secure_remote_api = options.get('SECURE_REMOTE_API', True)
         self._setup_stubs()
 
     def _get_paths(self):
         if self.use_test_datastore:
-            return get_test_datastore_paths(self.test_datastore_inmemory)
+            return get_test_datastore_paths(self.settings_dict, self.test_datastore_inmemory)
         else:
             return get_datastore_paths(self.settings_dict)
 
@@ -141,30 +134,73 @@ class DatabaseWrapper(NonrelDatabaseWrapper):
         if not have_appserver:
             from google.appengine.tools import dev_appserver_main
             args = dev_appserver_main.DEFAULT_ARGS.copy()
-            args['datastore_path'], args['blobstore_path'], args['history_path'] = self._get_paths()
+            args.update(self._get_paths())
+            log_level = logging.getLogger().getEffectiveLevel()
+            logging.getLogger().setLevel(logging.WARNING)
             from google.appengine.tools import dev_appserver
             dev_appserver.SetupStubs(appid, **args)
+            logging.getLogger().setLevel(log_level)
         # If we're supposed to set up the remote_api, do that now.
         if self.remote:
             self.setup_remote()
 
     def setup_remote(self):
+        if not self.remote_api_path:
+            from ..utils import appconfig
+            for handler in appconfig.handlers:
+                if handler.script == REMOTE_API_SCRIPT:
+                    self.remote_api_path = handler.url.split('(', 1)[0]
+                    break
         self.remote = True
-        logging.info('Setting up remote_api for "%s" at http://%s%s' %
-                     (self.remote_app_id, self.remote_host, self.remote_url)
-                     )
+        server = '%s.%s' % (self.remote_app_id, self.domain)
+        remote_url = 'https://%s%s' % (server, self.remote_api_path)
+        logging.info('Setting up remote_api for "%s" at %s' %
+                     (self.remote_app_id, remote_url))
+        if not have_appserver:
+            print('Connecting to remote_api handler.\n\n'
+                  'IMPORTANT: Check your login method settings in the '
+                  'App Engine Dashboard if you have problems logging in. '
+                  'Login is only supported for Google Accounts.\n')
         from google.appengine.ext.remote_api import remote_api_stub
-        from google.appengine.ext import db
-        remote_api_stub.ConfigureRemoteDatastore(self.remote_app_id,
-            self.remote_url, auth_func, self.remote_host,
+        remote_app_id = self.remote_app_id
+        if self.high_replication:
+            remote_app_id = 's~' + remote_app_id
+        remote_api_stub.ConfigureRemoteApi(remote_app_id,
+            self.remote_api_path, auth_func, servername=server,
+            secure=self.secure_remote_api,
             rpc_server_factory=rpc_server_factory)
-        logging.info('Now using the remote datastore for "%s" at http://%s%s' %
-                     (self.remote_app_id, self.remote_host, self.remote_url))
+        retry_delay = 1
+        while retry_delay <= 16:
+            try:
+                remote_api_stub.MaybeInvokeAuthentication()
+            except HTTPError, e:
+                if not have_appserver:
+                    print 'Retrying in %d seconds...' % retry_delay
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                break
+        else:
+            try:
+                remote_api_stub.MaybeInvokeAuthentication()
+            except HTTPError, e:
+                raise URLError("%s\n"
+                               "Couldn't reach remote_api handler at %s.\n"
+                               "Make sure you've deployed your project and "
+                               "installed a remote_api handler in app.yaml. "
+                               "Note that login is only supported for "
+                               "Google Accounts. Make sure you've configured "
+                               "the correct authentication method in the "
+                               "App Engine Dashboard."
+                               % (e, remote_url))
+        logging.info('Now using the remote datastore for "%s" at %s' %
+                     (self.remote_app_id, remote_url))
 
     def flush(self):
         """Helper function to remove the current datastore and re-open the stubs"""
         if self.remote:
-            import random, string
+            import random
+            import string
             code = ''.join([random.choice(string.ascii_letters) for x in range(4)])
             print '\n\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
             print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
@@ -194,5 +230,5 @@ class DatabaseWrapper(NonrelDatabaseWrapper):
                 print 'Aborting'
                 exit()
         else:
-            destroy_datastore(*self._get_paths())
+            destroy_datastore(self._get_paths())
         self._setup_stubs()

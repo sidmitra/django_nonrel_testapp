@@ -1,23 +1,27 @@
-Since these files in this repo might not be updated, save the following code as a .bat and run. 
-Replace the PROJECT_NAME and it should clone and setup all the relevant repos automatically. Just modify set/rmdir commands for bash if needed.
+The following are the steps I followed to make this repository.
 
-set PROJECT_NAME=cloudshuffle-homepage
-
-hg clone http://bitbucket.org/wkornewald/django-testapp/
-mv django-testapp %PROJECT_NAME%
-
-:: django-nonrel
-hg clone http://bitbucket.org/wkornewald/django-nonrel
-mv django-nonrel/django %PROJECT_NAME%
-rmdir /S /Q django-nonrel
-
-:: djangotoolbox
-hg clone http://bitbucket.org/wkornewald/djangotoolbox/
-mv djangotoolbox/djangotoolbox %PROJECT_NAME%
-rmdir /S /Q djangotoolbox
-
-:: djangoappengine
-cd %PROJECT_NAME%
-hg clone http://bitbucket.org/wkornewald/djangoappengine/
+You can do the same to get the latest versions of all dependencies.
 
 
+    hg clone http://bitbucket.org/wkornewald/django-testapp/
+    hg clone http://bitbucket.org/wkornewald/django-dbindexer/
+    hg clone http://bitbucket.org/wkornewald/django-nonrel
+    hg clone http://bitbucket.org/wkornewald/djangotoolbox/
+    hg clone http://bitbucket.org/wkornewald/djangoappengine/
+
+    cd django-testapp
+    cp -R ../django-nonrel/django django
+    cp -R ../djangoappengine djangoappengine
+    cp -R ../djangotoolbox/djangotoolbox djangotoolbox
+    cp -R ../django-dbindexer/dbindexer dbindexer
+    python manage.py runserver
+
+
+And that’s it. Essentially we’ve copied all the dependencies into the project folder. So your directory structure should look something like this.
+
+    * django-testapp
+         * django
+         * djangotoolbox
+         * djangoappengine
+         * dbindexer 
+         * ...
