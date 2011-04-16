@@ -25,3 +25,10 @@ And that’s it. Essentially we’ve copied all the dependencies into the projec
          * djangoappengine
          * dbindexer 
          * ...
+
+
+
+NOTE: This has known problems inside virtualenv. You might get the following.
+    
+    ImportError: Could not import settings 'settings' (Is it on sys.path?): No module named mimetypes
+
